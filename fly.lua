@@ -147,49 +147,67 @@ local moveVector = Vector3.new(0,0,0)
 local verticalInput = 0 -- -1 вниз, 0 нейтраль, 1 вверх
 local sinking = false
 local noclip = false
-local teleportBackEnabled = false
 
 local character, humanoid, rootPart
 local bodyVelocity, bodyGyro
 local particle -- визуальная частица
 
--- Анти-телепорт система
-local lastValidPosition = nil
-local teleportCheckConnection = nil
+-- Система обмана сервера
+local fakePosition = nil
+local serverDeceptionEnabled = false
+local originalCollision = {}
 
-local function startAntiTeleport()
-    if teleportCheckConnection then
-        teleportCheckConnection:Disconnect()
-    end
+-- Функция для обмана сервера (создание фантома на месте)
+local function enableServerDeception()
+    if not character or not rootPart then return end
     
-    teleportCheckConnection = RunService.Heartbeat:Connect(function()
-        if not character or not rootPart then return end
-        
-        local currentPos = rootPart.Position
-        if lastValidPosition then
-            local distance = (currentPos - lastValidPosition).Magnitude
-            -- Если телепортировались слишком далеко (более 100 studs за кадр)
-            if distance > 100 then
-                -- Мягко возвращаем на предыдущую позицию
-                rootPart.CFrame = CFrame.new(lastValidPosition)
-            else
-                lastValidPosition = currentPos
-            end
-        else
-            lastValidPosition = currentPos
+    serverDeceptionEnabled = true
+    fakePosition = rootPart.Position
+    
+    -- Сохраняем оригинальные коллизии
+    for _, part in pairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            originalCollision[part] = part.CanCollide
         end
-    end)
-end
-
-local function stopAntiTeleport()
-    if teleportCheckConnection then
-        teleportCheckConnection:Disconnect()
-        teleportCheckConnection = nil
     end
-    lastValidPosition = nil
 end
 
--- Ноуклип функция
+local function disableServerDeception()
+    serverDeceptionEnabled = false
+    fakePosition = nil
+    
+    -- Восстанавливаем оригинальные коллизии
+    for part, canCollide in pairs(originalCollision) do
+        if part and part.Parent then
+            part.CanCollide = canCollide
+        end
+    end
+    originalCollision = {}
+end
+
+local function updateServerDeception()
+    if not serverDeceptionEnabled or not character or not rootPart then return end
+    
+    -- Обновляем фантомную позицию (медленно двигаем к реальной позиции)
+    if fakePosition then
+        local currentPos = rootPart.Position
+        local distance = (currentPos - fakePosition).Magnitude
+        
+        -- Если ушли слишком далеко, медленно подтягиваем фантом
+        if distance > 10 then
+            fakePosition = fakePosition + (currentPos - fakePosition).Unit * 2
+        end
+        
+        -- Обманываем сервер - устанавливаем коллизии на фантомной позиции
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false -- Отключаем коллизии для реального движения
+            end
+        end
+    end
+end
+
+-- Ноуклип функция (исправленная)
 local noclipConnection = nil
 local function toggleNoclip()
     noclip = not noclip
@@ -208,6 +226,9 @@ local function toggleNoclip()
         end
         
         -- Следим за новыми частями
+        if noclipConnection then
+            noclipConnection:Disconnect()
+        end
         noclipConnection = character.DescendantAdded:Connect(function(part)
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -234,8 +255,10 @@ local function toggleNoclip()
     end
 end
 
--- Функция скрытия под землю
+-- Функция скрытия под землю (для других игроков)
 local originalPositions = {}
+local sinkConnections = {}
+
 local function sinkUnderground()
     if sinking then return end
     
@@ -243,15 +266,33 @@ local function sinkUnderground()
     sinkStatusLabel.Text = "Sink: ON (G)"
     sinkStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
     
-    -- Сохраняем оригинальные позиции всех игроков
-    originalPositions = {}
+    -- Сохраняем оригинальные позиции всех игроков и перемещаем их под землю
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= localPlayer and player.Character then
             local hrp = player.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
                 originalPositions[player] = hrp.Position
-                -- Перемещаем под землю
-                hrp.CFrame = CFrame.new(hrp.Position - Vector3.new(0, 100, 0))
+                -- Создаем невидимую копию на оригинальной позиции для сервера
+                local fakePart = Instance.new("Part")
+                fakePart.Name = "FakePlayer"
+                fakePart.Anchored = true
+                fakePart.CanCollide = false
+                fakePart.Transparency = 1
+                fakePart.Size = Vector3.new(2, 2, 1)
+                fakePart.Position = hrp.Position
+                fakePart.Parent = workspace
+                
+                -- Перемещаем реального игрока под землю
+                hrp.CFrame = CFrame.new(hrp.Position - Vector3.new(0, 500, 0))
+                
+                -- Следим за изменениями позиции
+                local connection = hrp:GetPropertyChangedSignal("Position"):Connect(function()
+                    -- Поддерживаем позицию под землей
+                    if hrp.Position.Y > -100 then
+                        hrp.CFrame = CFrame.new(hrp.Position.X, -500, hrp.Position.Z)
+                    end
+                end)
+                sinkConnections[player] = {fake = fakePart, connection = connection}
             end
         end
     end
@@ -264,16 +305,23 @@ local function bringBackUp()
     sinkStatusLabel.Text = "Sink: OFF (G)"
     sinkStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
     
-    -- Возвращаем игроков на оригинальные позиции
-    for player, originalPos in pairs(originalPositions) do
+    -- Возвращаем игроков на оригинальные позиции и убираем фейки
+    for player, data in pairs(sinkConnections) do
         if player and player.Character then
             local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                hrp.CFrame = CFrame.new(originalPos)
+            if hrp and originalPositions[player] then
+                hrp.CFrame = CFrame.new(originalPositions[player])
             end
+        end
+        if data.connection then
+            data.connection:Disconnect()
+        end
+        if data.fake and data.fake.Parent then
+            data.fake:Destroy()
         end
     end
     originalPositions = {}
+    sinkConnections = {}
 end
 
 -- Слежение за персонажем
@@ -327,16 +375,16 @@ local function enableFlight()
     emitter.Parent = rootPart
     particle = emitter
     
-    -- Включаем анти-телепорт при полете
-    startAntiTeleport()
+    -- Включаем обман сервера при полете
+    enableServerDeception()
 end
 
 local function disableFlight()
     clearFlightForces()
     moveVector = Vector3.new(0,0,0)
     verticalInput = 0
-    -- Выключаем анти-телепорт
-    stopAntiTeleport()
+    -- Выключаем обман сервера
+    disableServerDeception()
 end
 
 -- Привязка ввода для управления
@@ -458,15 +506,14 @@ closeButton.MouseButton1Click:Connect(function()
     screenGui:Destroy()
     disableFlight()
     bringBackUp()
+    disableServerDeception()
     if noclipConnection then
         noclipConnection:Disconnect()
     end
-    stopAntiTeleport()
 end)
 
 -- Обновление каждого кадра
-local lastDelta = 0
-RunService.RenderStepped:Connect(function(dt)
+RunService.Heartbeat:Connect(function(dt)
     if not localPlayer.Character or not localPlayer.Character.Parent then
         localPlayer.CharacterAdded:Wait()
         setupCharacter(localPlayer.Character)
@@ -474,6 +521,11 @@ RunService.RenderStepped:Connect(function(dt)
 
     if not character or not rootPart then
         setupCharacter(localPlayer.Character)
+    end
+
+    -- Обновляем обман сервера
+    if serverDeceptionEnabled then
+        updateServerDeception()
     end
 
     if flying and bodyVelocity and bodyGyro and rootPart then
@@ -505,7 +557,12 @@ local function onCharacterAdded(char)
     statusLabel.TextColor3 = flying and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(200,200,200)
     
     if noclip then
-        toggleNoclip() -- переприменяем ноуклип
+        -- Переприменяем ноуклип
+        for _, part in pairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
     end
 end
 
@@ -514,9 +571,9 @@ if localPlayer.Character then
     onCharacterAdded(localPlayer.Character)
 end
 
--- при уходе игрока/спавне GUI сохранится благодаря ResetOnSpawn=false выше — но можно сбрасывать
 localPlayer.CharacterRemoving:Connect(function()
     disableFlight()
+    disableServerDeception()
 end)
 
 -- Дополнительно: quick hint
