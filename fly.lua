@@ -26,8 +26,8 @@ screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "Main"
-mainFrame.Size = UDim2.new(0, 260, 0, 110)
-mainFrame.Position = UDim2.new(0.5, -130, 0.85, 0)
+mainFrame.Size = UDim2.new(0, 300, 0, 150)
+mainFrame.Position = UDim2.new(0.5, -150, 0.85, 0)
 mainFrame.AnchorPoint = Vector2.new(0.5, 0)
 mainFrame.BackgroundTransparency = 0.15
 mainFrame.BackgroundColor3 = Color3.fromRGB(20,20,30)
@@ -37,53 +37,53 @@ mainFrame.Visible = true
 
 local title = Instance.new("TextLabel")
 title.Parent = mainFrame
-title.Size = UDim2.new(1, -12, 0, 28)
+title.Size = UDim2.new(1, -12, 0, 30)
 title.Position = UDim2.new(0, 6, 0, 6)
 title.BackgroundTransparency = 1
-title.Text = "Flight"
+title.Text = "Flight Controls"
 title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.SourceSansSemibold
-title.TextSize = 20
+title.TextSize = 24
 title.TextColor3 = Color3.fromRGB(240,240,240)
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Parent = mainFrame
-statusLabel.Size = UDim2.new(1, -12, 0, 20)
-statusLabel.Position = UDim2.new(0, 6, 0, 34)
+statusLabel.Size = UDim2.new(1, -12, 0, 25)
+statusLabel.Position = UDim2.new(0, 6, 0, 42)
 statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "Status: OFF (F)"
+statusLabel.Text = "Flight: OFF (F)"
 statusLabel.Font = Enum.Font.SourceSans
-statusLabel.TextSize = 14
+statusLabel.TextSize = 18
 statusLabel.TextColor3 = Color3.fromRGB(200,200,200)
 statusLabel.TextXAlignment = Enum.TextXAlignment.Left
 
-local speedText = Instance.new("TextLabel")
-speedText.Parent = mainFrame
-speedText.Size = UDim2.new(1, -12, 0, 20)
-speedText.Position = UDim2.new(0, 6, 0, 56)
-speedText.BackgroundTransparency = 1
-speedText.Text = "Speed: " .. tostring(DEFAULT_SPEED)
-speedText.Font = Enum.Font.SourceSans
-speedText.TextSize = 14
-speedText.TextColor3 = Color3.fromRGB(200,200,200)
-speedText.TextXAlignment = Enum.TextXAlignment.Left
-
 local sinkStatusLabel = Instance.new("TextLabel")
 sinkStatusLabel.Parent = mainFrame
-sinkStatusLabel.Size = UDim2.new(1, -12, 0, 20)
-sinkStatusLabel.Position = UDim2.new(0, 6, 0, 78)
+sinkStatusLabel.Size = UDim2.new(1, -12, 0, 25)
+sinkStatusLabel.Position = UDim2.new(0, 6, 0, 70)
 sinkStatusLabel.BackgroundTransparency = 1
 sinkStatusLabel.Text = "Sink: OFF (G)"
 sinkStatusLabel.Font = Enum.Font.SourceSans
-sinkStatusLabel.TextSize = 14
+sinkStatusLabel.TextSize = 18
 sinkStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
 sinkStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+local speedText = Instance.new("TextLabel")
+speedText.Parent = mainFrame
+speedText.Size = UDim2.new(1, -12, 0, 25)
+speedText.Position = UDim2.new(0, 6, 0, 98)
+speedText.BackgroundTransparency = 1
+speedText.Text = "Speed: " .. tostring(DEFAULT_SPEED)
+speedText.Font = Enum.Font.SourceSans
+speedText.TextSize = 18
+speedText.TextColor3 = Color3.fromRGB(200,200,200)
+speedText.TextXAlignment = Enum.TextXAlignment.Left
 
 -- Slider (простой)
 local sliderBackground = Instance.new("Frame")
 sliderBackground.Parent = mainFrame
-sliderBackground.Size = UDim2.new(1, -20, 0, 16)
-sliderBackground.Position = UDim2.new(0, 10, 0, 100)
+sliderBackground.Size = UDim2.new(1, -20, 0, 20)
+sliderBackground.Position = UDim2.new(0, 10, 0, 128)
 sliderBackground.BackgroundColor3 = Color3.fromRGB(50,50,60)
 sliderBackground.BorderSizePixel = 0
 sliderBackground.AnchorPoint = Vector2.new(0,0)
@@ -97,7 +97,7 @@ sliderFill.BackgroundColor3 = Color3.fromRGB(100,180,255)
 
 local sliderHandle = Instance.new("ImageLabel")
 sliderHandle.Parent = sliderBackground
-sliderHandle.Size = UDim2.new(0, 12, 0, 16)
+sliderHandle.Size = UDim2.new(0, 12, 0, 20)
 sliderHandle.Position = UDim2.new(0.5, -6, 0, 0)
 sliderHandle.BackgroundTransparency = 1
 sliderHandle.Image = "rbxassetid://0" -- пустой
@@ -189,7 +189,7 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == FLY_TOGGLE_KEY then
         flying = not flying
-        statusLabel.Text = "Status: " .. (flying and "ON" or "OFF") .. " (F)"
+        statusLabel.Text = "Flight: " .. (flying and "ON" or "OFF") .. " (F)"
         if flying then
             enableFlight()
         else
@@ -308,7 +308,7 @@ end)
 -- Подключение к CharacterAdded/Removing
 local function onCharacterAdded(char)
     setupCharacter(char)
-    statusLabel.Text = "Status: " .. (flying and "ON" or "OFF") .. " (F)"
+    statusLabel.Text = "Flight: " .. (flying and "ON" or "OFF") .. " (F)"
 end
 
 localPlayer.CharacterAdded:Connect(onCharacterAdded)
@@ -400,3 +400,10 @@ local function preventKick()
 end
 
 preventKick()
+
+-- Обновление положения игрока каждую секунду, чтобы избежать кика
+RunService.Heartbeat:Connect(function()
+    if flying then
+        preventKick()
+    end
+end)
