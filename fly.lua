@@ -6,6 +6,7 @@ local ACCELERATION = 120          -- ускорение (чем больше —
 local FLY_TOGGLE_KEY = Enum.KeyCode.F
 local ASCEND_KEY = Enum.KeyCode.Space
 local DESCEND_KEY = Enum.KeyCode.LeftShift
+local SINK_TOGGLE_KEY = Enum.KeyCode.G -- Ключ для включения/выключения погружения
 
 -- Сервисы
 local Players = game:GetService("Players")
@@ -67,11 +68,22 @@ speedText.TextSize = 14
 speedText.TextColor3 = Color3.fromRGB(200,200,200)
 speedText.TextXAlignment = Enum.TextXAlignment.Left
 
+local sinkStatusLabel = Instance.new("TextLabel")
+sinkStatusLabel.Parent = mainFrame
+sinkStatusLabel.Size = UDim2.new(1, -12, 0, 20)
+sinkStatusLabel.Position = UDim2.new(0, 6, 0, 78)
+sinkStatusLabel.BackgroundTransparency = 1
+sinkStatusLabel.Text = "Sink: OFF (G)"
+sinkStatusLabel.Font = Enum.Font.SourceSans
+sinkStatusLabel.TextSize = 14
+sinkStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
+sinkStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
 -- Slider (простой)
 local sliderBackground = Instance.new("Frame")
 sliderBackground.Parent = mainFrame
 sliderBackground.Size = UDim2.new(1, -20, 0, 16)
-sliderBackground.Position = UDim2.new(0, 10, 0, 80)
+sliderBackground.Position = UDim2.new(0, 10, 0, 100)
 sliderBackground.BackgroundColor3 = Color3.fromRGB(50,50,60)
 sliderBackground.BorderSizePixel = 0
 sliderBackground.AnchorPoint = Vector2.new(0,0)
@@ -96,6 +108,7 @@ local flying = false
 local currentSpeed = DEFAULT_SPEED
 local moveVector = Vector3.new(0,0,0)
 local verticalInput = 0 -- -1 вниз, 0 нейтраль, 1 вверх
+local sinking = false
 
 local character, humanoid, rootPart
 local bodyVelocity, bodyGyro
@@ -196,6 +209,14 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         keys.left = true; updateMoveVector()
     elseif input.KeyCode == Enum.KeyCode.D then
         keys.right = true; updateMoveVector()
+    elseif input.KeyCode == SINK_TOGGLE_KEY then
+        sinking = not sinking
+        sinkStatusLabel.Text = "Sink: " .. (sinking and "ON" or "OFF") .. " (G)"
+        if sinking then
+            sinkOthers()
+        else
+            bringOthersBack()
+        end
     end
 end)
 
@@ -306,7 +327,7 @@ hint.Parent = mainFrame
 hint.Size = UDim2.new(1, -12, 0, 12)
 hint.Position = UDim2.new(0, 6, 1, -16)
 hint.BackgroundTransparency = 1
-hint.Text = "W/A/S/D + Space/Shift, F - toggle"
+hint.Text = "W/A/S/D + Space/Shift, F - toggle, G - sink toggle"
 hint.Font = Enum.Font.SourceSans
 hint.TextSize = 12
 hint.TextColor3 = Color3.fromRGB(170,170,170)
@@ -316,3 +337,66 @@ hint.TextXAlignment = Enum.TextXAlignment.Left
 local defaultScale = (DEFAULT_SPEED - 20) / (200 - 20)
 sliderFill.Size = UDim2.new(defaultScale, 0, 1, 0)
 sliderHandle.Position = UDim2.new(defaultScale, 0, 0, 0)
+
+-- Ноуклип с игнорированием текстур
+local function noClip()
+    local function ignoreTextures(part)
+        part.CanCollide = false
+        part.Transparency = 1
+    end
+
+    for _, part in pairs(workspace:GetChildren()) do
+        if part:IsA("BasePart") then
+            ignoreTextures(part)
+        end
+    end
+
+    workspace.ChildAdded:Connect(function(child)
+        if child:IsA("BasePart") then
+            ignoreTextures(child)
+        end
+    end)
+end
+
+noClip()
+
+-- Функция для погружения всех игроков под землю, кроме вас
+local function sinkOthers()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            local char = player.Character
+            if char then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid.PlatformStand = true
+                    char:SetPrimaryPartCFrame(CFrame.new(0, -50, 0)) -- погружаем под землю
+                end
+            end
+        end
+    end
+end
+
+-- Функция для возвращения всех игроков на поверхность
+local function bringOthersBack()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= localPlayer then
+            local char = player.Character
+            if char then
+                local humanoid = char:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid.PlatformStand = false
+                end
+            end
+        end
+    end
+end
+
+-- Предотвращение кика с сервера
+local function preventKick()
+    local humanoid = localPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if humanoid then
+        humanoid.PlatformStand = true
+    end
+end
+
+preventKick()
