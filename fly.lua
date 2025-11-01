@@ -1,8 +1,8 @@
 -- FlightWithUI.lua (положить в StarterPlayerScripts как LocalScript)
 
 -- Настройки по умолчанию (можно менять)
-local DEFAULT_SPEED = 80          -- максимальная скорость полёта (studs/sec)
-local ACCELERATION = 120          -- ускорение (чем больше — тем резче)
+local DEFAULT_SPEED = 50          -- максимальная скорость полёта (studs/sec)
+local ACCELERATION = 80           -- ускорение (чем больше — тем резче)
 local FLY_TOGGLE_KEY = Enum.KeyCode.F
 local ASCEND_KEY = Enum.KeyCode.Space
 local DESCEND_KEY = Enum.KeyCode.LeftShift
@@ -152,62 +152,87 @@ local character, humanoid, rootPart
 local bodyVelocity, bodyGyro
 local particle -- визуальная частица
 
--- Система обмана сервера
-local fakePosition = nil
-local serverDeceptionEnabled = false
-local originalCollision = {}
+-- Улучшенная система флая (микро-телепортации)
+local lastPosition = nil
+local teleportThreshold = 3 -- Максимальное расстояние за кадр (studs)
+local flyConnection = nil
 
--- Функция для обмана сервера (создание фантома на месте)
-local function enableServerDeception()
-    if not character or not rootPart then return end
+local function enableFlight()
+    if not rootPart then return end
+    clearFlightForces()
     
-    serverDeceptionEnabled = true
-    fakePosition = rootPart.Position
+    lastPosition = rootPart.Position
     
-    -- Сохраняем оригинальные коллизии
-    for _, part in pairs(character:GetDescendants()) do
-        if part:IsA("BasePart") then
-            originalCollision[part] = part.CanCollide
-        end
+    -- Используем BodyVelocity для плавности, но ограничиваем скорость
+    bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(4000, 4000, 4000) -- Меньшая сила для меньшей скорости
+    bodyVelocity.Velocity = Vector3.new(0,0,0)
+    bodyVelocity.P = 500
+    bodyVelocity.Parent = rootPart
+
+    bodyGyro = Instance.new("BodyGyro")
+    bodyGyro.MaxTorque = Vector3.new(4000, 4000, 4000)
+    bodyGyro.CFrame = rootPart.CFrame
+    bodyGyro.P = 500
+    bodyGyro.Parent = rootPart
+
+    -- Визуализация
+    local emitter = Instance.new("ParticleEmitter")
+    emitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0,0.3), NumberSequenceKeypoint.new(1,0)})
+    emitter.Speed = NumberRange.new(0, 0)
+    emitter.Rate = 20
+    emitter.Lifetime = NumberRange.new(0.3,0.5)
+    emitter.VelocitySpread = 90
+    emitter.Parent = rootPart
+    particle = emitter
+    
+    -- Включаем систему микро-телепортации
+    if flyConnection then
+        flyConnection:Disconnect()
     end
-end
-
-local function disableServerDeception()
-    serverDeceptionEnabled = false
-    fakePosition = nil
     
-    -- Восстанавливаем оригинальные коллизии
-    for part, canCollide in pairs(originalCollision) do
-        if part and part.Parent then
-            part.CanCollide = canCollide
-        end
-    end
-    originalCollision = {}
-end
-
-local function updateServerDeception()
-    if not serverDeceptionEnabled or not character or not rootPart then return end
-    
-    -- Обновляем фантомную позицию (медленно двигаем к реальной позиции)
-    if fakePosition then
+    flyConnection = RunService.Heartbeat:Connect(function(dt)
+        if not flying or not rootPart then return end
+        
         local currentPos = rootPart.Position
-        local distance = (currentPos - fakePosition).Magnitude
-        
-        -- Если ушли слишком далеко, медленно подтягиваем фантом
-        if distance > 10 then
-            fakePosition = fakePosition + (currentPos - fakePosition).Unit * 2
-        end
-        
-        -- Обманываем сервер - устанавливаем коллизии на фантомной позиции
-        for _, part in pairs(character:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false -- Отключаем коллизии для реального движения
+        if lastPosition then
+            local distance = (currentPos - lastPosition).Magnitude
+            
+            -- Если переместились слишком далеко, телепортируем обратно на маленькое расстояние
+            if distance > teleportThreshold then
+                local direction = (currentPos - lastPosition).Unit
+                local newPos = lastPosition + direction * math.min(distance, teleportThreshold * 0.8)
+                rootPart.CFrame = CFrame.new(newPos)
+            else
+                lastPosition = currentPos
             end
+        else
+            lastPosition = currentPos
         end
-    end
+    end)
 end
 
--- Ноуклип функция (исправленная)
+local function clearFlightForces()
+    if bodyVelocity and bodyVelocity.Parent then bodyVelocity:Destroy() end
+    if bodyGyro and bodyGyro.Parent then bodyGyro:Destroy() end
+    if particle and particle.Parent then particle:Destroy() end
+    if flyConnection then
+        flyConnection:Disconnect()
+        flyConnection = nil
+    end
+    bodyVelocity = nil
+    bodyGyro = nil
+    particle = nil
+    lastPosition = nil
+end
+
+local function disableFlight()
+    clearFlightForces()
+    moveVector = Vector3.new(0,0,0)
+    verticalInput = 0
+end
+
+-- Ноуклип функция
 local noclipConnection = nil
 local function toggleNoclip()
     noclip = not noclip
@@ -255,9 +280,10 @@ local function toggleNoclip()
     end
 end
 
--- Функция скрытия под землю (для других игроков)
+-- Улучшенная функция синка (только для других игроков)
 local originalPositions = {}
 local sinkConnections = {}
+local fakeParts = {}
 
 local function sinkUnderground()
     if sinking then return end
@@ -272,27 +298,26 @@ local function sinkUnderground()
             local hrp = player.Character:FindFirstChild("HumanoidRootPart")
             if hrp then
                 originalPositions[player] = hrp.Position
-                -- Создаем невидимую копию на оригинальной позиции для сервера
+                
+                -- Создаем невидимую копию на оригинальной позиции
                 local fakePart = Instance.new("Part")
-                fakePart.Name = "FakePlayer"
+                fakePart.Name = "FakePlayer_" .. player.Name
                 fakePart.Anchored = true
                 fakePart.CanCollide = false
                 fakePart.Transparency = 1
-                fakePart.Size = Vector3.new(2, 2, 1)
+                fakePart.Size = Vector3.new(4, 6, 2)
                 fakePart.Position = hrp.Position
                 fakePart.Parent = workspace
+                fakeParts[player] = fakePart
                 
-                -- Перемещаем реального игрока под землю
-                hrp.CFrame = CFrame.new(hrp.Position - Vector3.new(0, 500, 0))
+                -- Перемещаем реального игрока глубоко под землю
+                hrp.CFrame = CFrame.new(hrp.Position.X, -1000, hrp.Position.Z)
                 
-                -- Следим за изменениями позиции
-                local connection = hrp:GetPropertyChangedSignal("Position"):Connect(function()
-                    -- Поддерживаем позицию под землей
-                    if hrp.Position.Y > -100 then
-                        hrp.CFrame = CFrame.new(hrp.Position.X, -500, hrp.Position.Z)
-                    end
-                end)
-                sinkConnections[player] = {fake = fakePart, connection = connection}
+                -- Отключаем любые движения
+                local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                    humanoid.PlatformStand = true
+                end
             end
         end
     end
@@ -305,22 +330,36 @@ local function bringBackUp()
     sinkStatusLabel.Text = "Sink: OFF (G)"
     sinkStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
     
-    -- Возвращаем игроков на оригинальные позиции и убираем фейки
-    for player, data in pairs(sinkConnections) do
+    -- Возвращаем игроков на оригинальные позиции
+    for player, originalPos in pairs(originalPositions) do
         if player and player.Character then
             local hrp = player.Character:FindFirstChild("HumanoidRootPart")
-            if hrp and originalPositions[player] then
-                hrp.CFrame = CFrame.new(originalPositions[player])
+            local humanoid = player.Character:FindFirstChildOfClass("Humanoid")
+            
+            if hrp then
+                hrp.CFrame = CFrame.new(originalPos)
+            end
+            
+            if humanoid then
+                humanoid.PlatformStand = false
             end
         end
-        if data.connection then
-            data.connection:Disconnect()
-        end
-        if data.fake and data.fake.Parent then
-            data.fake:Destroy()
+    end
+    
+    -- Убираем фейки
+    for player, fakePart in pairs(fakeParts) do
+        if fakePart and fakePart.Parent then
+            fakePart:Destroy()
         end
     end
+    
     originalPositions = {}
+    fakeParts = {}
+    
+    -- Отключаем соединения
+    for _, connection in pairs(sinkConnections) do
+        connection:Disconnect()
+    end
     sinkConnections = {}
 end
 
@@ -340,53 +379,6 @@ local function setupCharacter(char)
     end
 end
 
-local function clearFlightForces()
-    if bodyVelocity and bodyVelocity.Parent then bodyVelocity:Destroy() end
-    if bodyGyro and bodyGyro.Parent then bodyGyro:Destroy() end
-    if particle and particle.Parent then particle:Destroy() end
-    bodyVelocity = nil
-    bodyGyro = nil
-    particle = nil
-end
-
-local function enableFlight()
-    if not rootPart then return end
-    clearFlightForces()
-
-    bodyVelocity = Instance.new("BodyVelocity")
-    bodyVelocity.MaxForce = Vector3.new(9e5, 9e5, 9e5)
-    bodyVelocity.Velocity = Vector3.new(0,0,0)
-    bodyVelocity.P = 1e4
-    bodyVelocity.Parent = rootPart
-
-    bodyGyro = Instance.new("BodyGyro")
-    bodyGyro.MaxTorque = Vector3.new(9e5, 9e5, 9e5)
-    bodyGyro.CFrame = rootPart.CFrame
-    bodyGyro.P = 1e4
-    bodyGyro.Parent = rootPart
-
-    -- Простая визуализация частиц на корне
-    local emitter = Instance.new("ParticleEmitter")
-    emitter.Size = NumberSequence.new({NumberSequenceKeypoint.new(0,0.5), NumberSequenceKeypoint.new(1,0)})
-    emitter.Speed = NumberRange.new(0, 0)
-    emitter.Rate = 40
-    emitter.Lifetime = NumberRange.new(0.4,0.7)
-    emitter.VelocitySpread = 90
-    emitter.Parent = rootPart
-    particle = emitter
-    
-    -- Включаем обман сервера при полете
-    enableServerDeception()
-end
-
-local function disableFlight()
-    clearFlightForces()
-    moveVector = Vector3.new(0,0,0)
-    verticalInput = 0
-    -- Выключаем обман сервера
-    disableServerDeception()
-end
-
 -- Привязка ввода для управления
 local keys = {
     forward = false,
@@ -398,10 +390,10 @@ local keys = {
 local function updateMoveVector()
     local forward = (keys.forward and 1 or 0) - (keys.backward and 1 or 0)
     local right = (keys.right and 1 or 0) - (keys.left and 1 or 0)
-    -- Вектор в системе камеры (здесь игнорируем вертикаль)
+    
     local camCFrame = camera.CFrame
     local camForward = Vector3.new(camCFrame.LookVector.X, 0, camCFrame.LookVector.Z).Unit
-    if camForward ~= camForward then camForward = Vector3.new(0,0,-1) end -- NaN guard
+    if camForward ~= camForward then camForward = Vector3.new(0,0,-1) end
     local camRight = Vector3.new(camCFrame.RightVector.X, 0, camCFrame.RightVector.Z).Unit
 
     moveVector = (camForward * forward) + (camRight * right)
@@ -464,8 +456,7 @@ end)
 -- Slider drag handling
 local dragging = false
 local function sliderToSpeed(scale)
-    -- scale: 0..1 -> speed range
-    local minS, maxS = 20, 200
+    local minS, maxS = 10, 80  -- Ограниченная скорость для безопасности
     return math.floor(minS + (maxS - minS) * math.clamp(scale, 0, 1))
 end
 
@@ -506,7 +497,6 @@ closeButton.MouseButton1Click:Connect(function()
     screenGui:Destroy()
     disableFlight()
     bringBackUp()
-    disableServerDeception()
     if noclipConnection then
         noclipConnection:Disconnect()
     end
@@ -523,30 +513,26 @@ RunService.Heartbeat:Connect(function(dt)
         setupCharacter(localPlayer.Character)
     end
 
-    -- Обновляем обман сервера
-    if serverDeceptionEnabled then
-        updateServerDeception()
-    end
-
     if flying and bodyVelocity and bodyGyro and rootPart then
-        -- цельная скорость (горизонтальная часть)
         updateMoveVector()
         local targetVelocity = moveVector * currentSpeed
-        -- добавляем вертикальную составляющую
-        local climbSpeed = 40 -- базовая скорость подъёма/спуска
+        
+        -- Ограниченная вертикальная скорость
+        local climbSpeed = 25
         local verticalVel = verticalInput * climbSpeed
-        -- сглаживание: интерполяция текущей к новой
+        
+        -- Плавное изменение скорости
         local curVel = bodyVelocity.Velocity
         local desired = Vector3.new(targetVelocity.X, verticalVel, targetVelocity.Z)
-        -- приближаем с учётом ускорения
         local t = math.clamp(ACCELERATION * dt, 0, 1)
         local newVel = curVel:Lerp(desired, t)
+        
         bodyVelocity.Velocity = Vector3.new(newVel.X, newVel.Y, newVel.Z)
 
-        -- ориентация: смотрим в направлении движения камеры (либо направление полёта)
+        -- Плавный поворот
         local lookAt = camera.CFrame.LookVector
         local targetCFrame = CFrame.new(rootPart.Position, rootPart.Position + lookAt)
-        bodyGyro.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.2)
+        bodyGyro.CFrame = rootPart.CFrame:Lerp(targetCFrame, 0.15)
     end
 end)
 
@@ -557,7 +543,6 @@ local function onCharacterAdded(char)
     statusLabel.TextColor3 = flying and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(200,200,200)
     
     if noclip then
-        -- Переприменяем ноуклип
         for _, part in pairs(char:GetDescendants()) do
             if part:IsA("BasePart") then
                 part.CanCollide = false
@@ -573,7 +558,6 @@ end
 
 localPlayer.CharacterRemoving:Connect(function()
     disableFlight()
-    disableServerDeception()
 end)
 
 -- Дополнительно: quick hint
@@ -582,14 +566,14 @@ hint.Parent = mainFrame
 hint.Size = UDim2.new(1, -12, 0, 12)
 hint.Position = UDim2.new(0, 6, 1, -16)
 hint.BackgroundTransparency = 1
-hint.Text = "W/A/S/D + Space/Shift, F - flight, V - noclip, G - sink, RightShift - UI"
+hint.Text = "W/A/S/D + Space/Shift, F - flight, V - noclip, G - sink others, RightShift - UI"
 hint.Font = Enum.Font.SourceSans
 hint.TextSize = 12
 hint.TextColor3 = Color3.fromRGB(170,170,170)
 hint.TextXAlignment = Enum.TextXAlignment.Left
 
 -- Инициализация: slider default position
-local defaultScale = (DEFAULT_SPEED - 20) / (200 - 20)
+local defaultScale = (DEFAULT_SPEED - 10) / (80 - 10)
 sliderFill.Size = UDim2.new(defaultScale, 0, 1, 0)
 sliderHandle.Position = UDim2.new(defaultScale, 0, 0, 0)
 
