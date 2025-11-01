@@ -7,13 +7,14 @@ local FLY_TOGGLE_KEY = Enum.KeyCode.F
 local ASCEND_KEY = Enum.KeyCode.Space
 local DESCEND_KEY = Enum.KeyCode.LeftShift
 local SINK_TOGGLE_KEY = Enum.KeyCode.G -- Ключ для включения/выключения погружения
+local NOCLIP_TOGGLE_KEY = Enum.KeyCode.V -- Ключ для включения/выключения ноуклипа
+local UI_TOGGLE_KEY = Enum.KeyCode.RightShift -- Ключ для переключения UI
 
 -- Сервисы
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService = game:GetService("TweenService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local localPlayer = Players.LocalPlayer
 local camera = workspace.CurrentCamera
@@ -26,14 +27,14 @@ screenGui.Parent = localPlayer:WaitForChild("PlayerGui")
 
 local mainFrame = Instance.new("Frame")
 mainFrame.Name = "Main"
-mainFrame.Size = UDim2.new(0, 300, 0, 150)
-mainFrame.Position = UDim2.new(0.5, -150, 0.85, 0)
-mainFrame.AnchorPoint = Vector2.new(0.5, 0)
+mainFrame.Size = UDim2.new(0, 320, 0, 200)
+mainFrame.Position = UDim2.new(1, -340, 0.5, -100)
+mainFrame.AnchorPoint = Vector2.new(1, 0.5)
 mainFrame.BackgroundTransparency = 0.15
 mainFrame.BackgroundColor3 = Color3.fromRGB(20,20,30)
 mainFrame.BorderSizePixel = 0
 mainFrame.Parent = screenGui
-mainFrame.Visible = true
+mainFrame.Visible = false
 
 local title = Instance.new("TextLabel")
 title.Parent = mainFrame
@@ -57,10 +58,21 @@ statusLabel.TextSize = 18
 statusLabel.TextColor3 = Color3.fromRGB(200,200,200)
 statusLabel.TextXAlignment = Enum.TextXAlignment.Left
 
+local noclipStatusLabel = Instance.new("TextLabel")
+noclipStatusLabel.Parent = mainFrame
+noclipStatusLabel.Size = UDim2.new(1, -12, 0, 25)
+noclipStatusLabel.Position = UDim2.new(0, 6, 0, 70)
+noclipStatusLabel.BackgroundTransparency = 1
+noclipStatusLabel.Text = "Noclip: OFF (V)"
+noclipStatusLabel.Font = Enum.Font.SourceSans
+noclipStatusLabel.TextSize = 18
+noclipStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
+noclipStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
 local sinkStatusLabel = Instance.new("TextLabel")
 sinkStatusLabel.Parent = mainFrame
 sinkStatusLabel.Size = UDim2.new(1, -12, 0, 25)
-sinkStatusLabel.Position = UDim2.new(0, 6, 0, 70)
+sinkStatusLabel.Position = UDim2.new(0, 6, 0, 98)
 sinkStatusLabel.BackgroundTransparency = 1
 sinkStatusLabel.Text = "Sink: OFF (G)"
 sinkStatusLabel.Font = Enum.Font.SourceSans
@@ -71,7 +83,7 @@ sinkStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
 local speedText = Instance.new("TextLabel")
 speedText.Parent = mainFrame
 speedText.Size = UDim2.new(1, -12, 0, 25)
-speedText.Position = UDim2.new(0, 6, 0, 98)
+speedText.Position = UDim2.new(0, 6, 0, 126)
 speedText.BackgroundTransparency = 1
 speedText.Text = "Speed: " .. tostring(DEFAULT_SPEED)
 speedText.Font = Enum.Font.SourceSans
@@ -83,7 +95,7 @@ speedText.TextXAlignment = Enum.TextXAlignment.Left
 local sliderBackground = Instance.new("Frame")
 sliderBackground.Parent = mainFrame
 sliderBackground.Size = UDim2.new(1, -20, 0, 20)
-sliderBackground.Position = UDim2.new(0, 10, 0, 128)
+sliderBackground.Position = UDim2.new(0, 10, 0, 156)
 sliderBackground.BackgroundColor3 = Color3.fromRGB(50,50,60)
 sliderBackground.BorderSizePixel = 0
 sliderBackground.AnchorPoint = Vector2.new(0,0)
@@ -103,22 +115,181 @@ sliderHandle.BackgroundTransparency = 1
 sliderHandle.Image = "rbxassetid://0" -- пустой
 sliderHandle.AnchorPoint = Vector2.new(0.5, 0)
 
+-- Кнопки для управления интерфейсом
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Parent = mainFrame
+minimizeButton.Size = UDim2.new(0, 20, 0, 20)
+minimizeButton.Position = UDim2.new(1, -26, 0, 6)
+minimizeButton.BackgroundTransparency = 1
+minimizeButton.Text = "-"
+minimizeButton.Font = Enum.Font.SourceSans
+minimizeButton.TextSize = 18
+minimizeButton.TextColor3 = Color3.fromRGB(200,200,200)
+minimizeButton.TextXAlignment = Enum.TextXAlignment.Center
+minimizeButton.TextYAlignment = Enum.TextYAlignment.Center
+
+local closeButton = Instance.new("TextButton")
+closeButton.Parent = mainFrame
+closeButton.Size = UDim2.new(0, 20, 0, 20)
+closeButton.Position = UDim2.new(1, -56, 0, 6)
+closeButton.BackgroundTransparency = 1
+closeButton.Text = "X"
+closeButton.Font = Enum.Font.SourceSans
+closeButton.TextSize = 18
+closeButton.TextColor3 = Color3.fromRGB(200,200,200)
+closeButton.TextXAlignment = Enum.TextXAlignment.Center
+closeButton.TextYAlignment = Enum.TextYAlignment.Center
+
 -- Вспомогательные переменные
 local flying = false
 local currentSpeed = DEFAULT_SPEED
 local moveVector = Vector3.new(0,0,0)
 local verticalInput = 0 -- -1 вниз, 0 нейтраль, 1 вверх
 local sinking = false
+local noclip = false
+local teleportBackEnabled = false
 
 local character, humanoid, rootPart
 local bodyVelocity, bodyGyro
 local particle -- визуальная частица
+
+-- Анти-телепорт система
+local lastValidPosition = nil
+local teleportCheckConnection = nil
+
+local function startAntiTeleport()
+    if teleportCheckConnection then
+        teleportCheckConnection:Disconnect()
+    end
+    
+    teleportCheckConnection = RunService.Heartbeat:Connect(function()
+        if not character or not rootPart then return end
+        
+        local currentPos = rootPart.Position
+        if lastValidPosition then
+            local distance = (currentPos - lastValidPosition).Magnitude
+            -- Если телепортировались слишком далеко (более 100 studs за кадр)
+            if distance > 100 then
+                -- Мягко возвращаем на предыдущую позицию
+                rootPart.CFrame = CFrame.new(lastValidPosition)
+            else
+                lastValidPosition = currentPos
+            end
+        else
+            lastValidPosition = currentPos
+        end
+    end)
+end
+
+local function stopAntiTeleport()
+    if teleportCheckConnection then
+        teleportCheckConnection:Disconnect()
+        teleportCheckConnection = nil
+    end
+    lastValidPosition = nil
+end
+
+-- Ноуклип функция
+local noclipConnection = nil
+local function toggleNoclip()
+    noclip = not noclip
+    
+    if noclip then
+        noclipStatusLabel.Text = "Noclip: ON (V)"
+        noclipStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        
+        -- Включаем ноуклип
+        if character then
+            for _, part in pairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+        
+        -- Следим за новыми частями
+        noclipConnection = character.DescendantAdded:Connect(function(part)
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end)
+        
+    else
+        noclipStatusLabel.Text = "Noclip: OFF (V)"
+        noclipStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
+        
+        -- Выключаем ноуклип
+        if noclipConnection then
+            noclipConnection:Disconnect()
+            noclipConnection = nil
+        end
+        
+        if character then
+            for _, part in pairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
+                end
+            end
+        end
+    end
+end
+
+-- Функция скрытия под землю
+local originalPositions = {}
+local function sinkUnderground()
+    if sinking then return end
+    
+    sinking = true
+    sinkStatusLabel.Text = "Sink: ON (G)"
+    sinkStatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    
+    -- Сохраняем оригинальные позиции всех игроков
+    originalPositions = {}
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= localPlayer and player.Character then
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                originalPositions[player] = hrp.Position
+                -- Перемещаем под землю
+                hrp.CFrame = CFrame.new(hrp.Position - Vector3.new(0, 100, 0))
+            end
+        end
+    end
+end
+
+local function bringBackUp()
+    if not sinking then return end
+    
+    sinking = false
+    sinkStatusLabel.Text = "Sink: OFF (G)"
+    sinkStatusLabel.TextColor3 = Color3.fromRGB(200,200,200)
+    
+    -- Возвращаем игроков на оригинальные позиции
+    for player, originalPos in pairs(originalPositions) do
+        if player and player.Character then
+            local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                hrp.CFrame = CFrame.new(originalPos)
+            end
+        end
+    end
+    originalPositions = {}
+end
 
 -- Слежение за персонажем
 local function setupCharacter(char)
     character = char
     humanoid = char:FindFirstChildOfClass("Humanoid")
     rootPart = char:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("Torso") or char:FindFirstChild("UpperTorso")
+    
+    -- Применяем ноуклип если он включен
+    if noclip and character then
+        for _, part in pairs(character:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+    end
 end
 
 local function clearFlightForces()
@@ -155,12 +326,17 @@ local function enableFlight()
     emitter.VelocitySpread = 90
     emitter.Parent = rootPart
     particle = emitter
+    
+    -- Включаем анти-телепорт при полете
+    startAntiTeleport()
 end
 
 local function disableFlight()
     clearFlightForces()
     moveVector = Vector3.new(0,0,0)
     verticalInput = 0
+    -- Выключаем анти-телепорт
+    stopAntiTeleport()
 end
 
 -- Привязка ввода для управления
@@ -187,20 +363,30 @@ end
 -- Input handlers
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
+    
     if input.KeyCode == FLY_TOGGLE_KEY then
         flying = not flying
         statusLabel.Text = "Flight: " .. (flying and "ON" or "OFF") .. " (F)"
+        statusLabel.TextColor3 = flying and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(200,200,200)
         if flying then
             enableFlight()
         else
             disableFlight()
         end
-    end
-
-    if input.KeyCode == ASCEND_KEY then
+    elseif input.KeyCode == NOCLIP_TOGGLE_KEY then
+        toggleNoclip()
+    elseif input.KeyCode == ASCEND_KEY then
         verticalInput = 1
     elseif input.KeyCode == DESCEND_KEY then
         verticalInput = -1
+    elseif input.KeyCode == SINK_TOGGLE_KEY then
+        if sinking then
+            bringBackUp()
+        else
+            sinkUnderground()
+        end
+    elseif input.KeyCode == UI_TOGGLE_KEY then
+        mainFrame.Visible = not mainFrame.Visible
     elseif input.KeyCode == Enum.KeyCode.W then
         keys.forward = true; updateMoveVector()
     elseif input.KeyCode == Enum.KeyCode.S then
@@ -209,14 +395,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
         keys.left = true; updateMoveVector()
     elseif input.KeyCode == Enum.KeyCode.D then
         keys.right = true; updateMoveVector()
-    elseif input.KeyCode == SINK_TOGGLE_KEY then
-        sinking = not sinking
-        sinkStatusLabel.Text = "Sink: " .. (sinking and "ON" or "OFF") .. " (G)"
-        if sinking then
-            sinkOthers()
-        else
-            bringOthersBack()
-        end
     end
 end)
 
@@ -271,6 +449,21 @@ UserInputService.InputEnded:Connect(function(input)
     end
 end)
 
+-- Кнопки управления интерфейсом
+minimizeButton.MouseButton1Click:Connect(function()
+    mainFrame.Visible = false
+end)
+
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+    disableFlight()
+    bringBackUp()
+    if noclipConnection then
+        noclipConnection:Disconnect()
+    end
+    stopAntiTeleport()
+end)
+
 -- Обновление каждого кадра
 local lastDelta = 0
 RunService.RenderStepped:Connect(function(dt)
@@ -309,6 +502,11 @@ end)
 local function onCharacterAdded(char)
     setupCharacter(char)
     statusLabel.Text = "Flight: " .. (flying and "ON" or "OFF") .. " (F)"
+    statusLabel.TextColor3 = flying and Color3.fromRGB(100, 255, 100) or Color3.fromRGB(200,200,200)
+    
+    if noclip then
+        toggleNoclip() -- переприменяем ноуклип
+    end
 end
 
 localPlayer.CharacterAdded:Connect(onCharacterAdded)
@@ -327,7 +525,7 @@ hint.Parent = mainFrame
 hint.Size = UDim2.new(1, -12, 0, 12)
 hint.Position = UDim2.new(0, 6, 1, -16)
 hint.BackgroundTransparency = 1
-hint.Text = "W/A/S/D + Space/Shift, F - toggle, G - sink toggle"
+hint.Text = "W/A/S/D + Space/Shift, F - flight, V - noclip, G - sink, RightShift - UI"
 hint.Font = Enum.Font.SourceSans
 hint.TextSize = 12
 hint.TextColor3 = Color3.fromRGB(170,170,170)
@@ -338,72 +536,4 @@ local defaultScale = (DEFAULT_SPEED - 20) / (200 - 20)
 sliderFill.Size = UDim2.new(defaultScale, 0, 1, 0)
 sliderHandle.Position = UDim2.new(defaultScale, 0, 0, 0)
 
--- Ноуклип с игнорированием текстур
-local function noClip()
-    local function ignoreTextures(part)
-        part.CanCollide = false
-        part.Transparency = 1
-    end
-
-    for _, part in pairs(workspace:GetChildren()) do
-        if part:IsA("BasePart") then
-            ignoreTextures(part)
-        end
-    end
-
-    workspace.ChildAdded:Connect(function(child)
-        if child:IsA("BasePart") then
-            ignoreTextures(child)
-        end
-    end)
-end
-
-noClip()
-
--- Функция для погружения всех игроков под землю, кроме вас
-local function sinkOthers()
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= localPlayer then
-            local char = player.Character
-            if char then
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid.PlatformStand = true
-                    char:SetPrimaryPartCFrame(CFrame.new(0, -50, 0)) -- погружаем под землю
-                end
-            end
-        end
-    end
-end
-
--- Функция для возвращения всех игроков на поверхность
-local function bringOthersBack()
-    for _, player in pairs(Players:GetPlayers()) do
-        if player ~= localPlayer then
-            local char = player.Character
-            if char then
-                local humanoid = char:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                    humanoid.PlatformStand = false
-                end
-            end
-        end
-    end
-end
-
--- Предотвращение кика с сервера
-local function preventKick()
-    local humanoid = localPlayer.Character:FindFirstChildOfClass("Humanoid")
-    if humanoid then
-        humanoid.PlatformStand = true
-    end
-end
-
-preventKick()
-
--- Обновление положения игрока каждую секунду, чтобы избежать кика
-RunService.Heartbeat:Connect(function()
-    if flying then
-        preventKick()
-    end
-end)
+print("Flight script loaded! Press RightShift to toggle UI")
